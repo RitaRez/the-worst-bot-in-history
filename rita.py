@@ -1,13 +1,8 @@
-import discord
 from discord.ext import commands
-import torch
 from TTS.api import TTS  # Ensure TTS is installed: pip install TTS
-import google.generativeai as genai
-import asyncio
-import os
 from secretive import GOOGLE_API_KEY, BOT_TOKEN, prompt_default, prompt_default_pt, prompt_gemini 
-import emoji
-import re
+import google.generativeai as genai
+import emoji, re, schedule, os, asyncio, torch, discord
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -59,74 +54,130 @@ async def on_ready():
 
     print("TTS model initialized successfully.")
 
+async def greet_office_hour():
+    print("Greeting office hour")
 
+    wav_path = "output.wav"
+    tts.tts_to_file(text="Howdy everyone! Sorry I'm late.", speaker_wav="target.wav", language="en", file_path=wav_path)
+
+    guild = bot.guilds[0]
+    general_channel = discord.utils.get(guild.voice_channels, name="general")
+    if general_channel is not None:
+        await general_channel.connect()
+        print(f"Joined {general_channel.name}")
+    else:
+        print("Voice channel not found")
+
+    await play_audio(general_channel, wav_path)
+
+
+async def leave_voice_channel():
+    if bot.voice_clients:
+        for vc in bot.voice_clients:
+            await vc.disconnect()
+            print(f"Disconnected from {vc.channel.name}")
+    else:
+        print("Not connected to any voice channel")
+
+# Run the schedule within an async loop
+async def schedule_tasks():
+    schedule.every().monday.at("14:02").do(lambda: asyncio.create_task(greet_office_hour()))
+    schedule.every().monday.at("14:30").do(lambda: asyncio.create_task(leave_voice_channel()))
+    schedule.every().monday.at("14:32").do(lambda: asyncio.create_task(greet_office_hour()))
+    schedule.every().monday.at("15:00").do(lambda: asyncio.create_task(leave_voice_channel()))
+    schedule.every().wednesday.at("14:02").do(lambda: asyncio.create_task(greet_office_hour()))
+    schedule.every().wednesday.at("14:30").do(lambda: asyncio.create_task(leave_voice_channel()))
+    schedule.every().wednesday.at("14:32").do(lambda: asyncio.create_task(greet_office_hour()))
+    schedule.every().wednesday.at("15:00").do(lambda: asyncio.create_task(leave_voice_channel()))
+    schedule.every().tuesday.at("14:32").do(lambda: asyncio.create_task(greet_office_hour()))
+    schedule.every().tuesday.at("15:00").do(lambda: asyncio.create_task(leave_voice_channel()))
+    schedule.every().tuesday.at("15:02").do(lambda: asyncio.create_task(greet_office_hour()))
+    schedule.every().tuesday.at("15:30").do(lambda: asyncio.create_task(leave_voice_channel()))
+    schedule.every().thursday.at("14:32").do(lambda: asyncio.create_task(greet_office_hour()))
+    schedule.every().thursday.at("15:00").do(lambda: asyncio.create_task(leave_voice_channel()))
+    schedule.every().thursday.at("15:02").do(lambda: asyncio.create_task(greet_office_hour()))
+    schedule.every().thursday.at("15:30").do(lambda: asyncio.create_task(leave_voice_channel()))
+
+    while True:
+        schedule.run_pending()
+        await asyncio.sleep(1)
+
+
+# Function to play audio in a voice channel
+async def play_audio(voice_channel, wav_path: str):
+    # Connect to the voice channel if the bot isn't already connected
+    if voice_channel.guild.voice_client is None:
+        await voice_channel.connect()
+    elif voice_channel.guild.voice_client.channel != voice_channel:
+        await voice_channel.guild.voice_client.move_to(voice_channel)
+
+    # Play the audio file
+    audio_source = discord.FFmpegPCMAudio(wav_path)
+    voice_channel.guild.voice_client.play(audio_source, after=lambda e: print('done', e))
+
+# Add setup_hook to start scheduling
+@bot.event
+async def setup_hook():
+    bot.loop.create_task(schedule_tasks())
+
+# Define a conversation history globally or as part of the user's session
+conversation_history = []
 
 async def generate_response(text, language="en", be_rita=True):
+    global conversation_history
+
     if be_rita:
         if language == "en":
             text = f"{prompt_default} {text}"
-        else :
+        else:
             text = f"{prompt_default_pt} {text}"
     else:
         text = f"{prompt_gemini} {text}"
 
-    # Generate response using Generative model and wait for the response response = gen_model.generate_content(text)
-    response = gen_model.generate_content(text)
+    # Add the user message to the conversation history
+    conversation_history.append(f"User: {text}")
 
-    # keep only alphabet characters and space
+    # Prepare the entire conversation as input to the model
+    conversation_text = "\n".join(conversation_history)
+
+    # Generate response using Generative model and pass the conversation history
+    response = gen_model.generate_content(conversation_text)
+
+    # Process the response and clean it
     answer = emoji.replace_emoji(response.text, replace='').strip()
 
+    # Optionally remove unnecessary punctuation or phrases in non-English languages
     if language != "en":
-
-
-        # remove last character if its a punctuation or space
         if answer[-1] in ['.']:
             answer = answer[:-1]
-
-        # remove oi or Oi from the beginning with regex
         answer = re.sub(r'^[Oo]i!*,* *', '', answer)
 
+    # Add the bot's response to the conversation history
+    conversation_history.append(f"Bot: {answer}")
+
+    # Return the bot's answer for output
     return answer
-
-
-async def play_audio(ctx, wav_path: str):
-
-    voice_channel = ctx.author.voice.channel
-
-    if ctx.voice_client is None:
-        await voice_channel.connect()
-
-    # Check if bot is already in a channel or moving to another channel
-    if ctx.voice_client.is_playing():
-        ctx.voice_client.stop()
-
-
-    audio_source = discord.FFmpegPCMAudio(wav_path)
-    ctx.voice_client.play(audio_source, after=lambda e: print(f'Finished playing: {e}'))
 
 
 # Function to join voice channel and play audio
 async def join_and_play(ctx, message, language="en", be_rita=True):
-    
-
     answer = await generate_response(message.content, language, be_rita)
 
-    print(ctx.author.voice)
+    # Check if the user is in a voice channel
     if ctx.author.voice is None:
         if language == "en":
             await ctx.send(f"You need to be in a voice channel for me to talk to you! But, {answer}")
         else:
             await ctx.send(f"Você precisa estar em um canal de voz para eu falar com você! Mas, {answer}")
         return
-    
 
     # Audio file path (or generate audio using the tts model)
-    # Example to generate TTS audio dynamically
     wav_path = "output.wav"
     tts.tts_to_file(text=answer, speaker_wav="target.wav", language=language, file_path=wav_path)
 
-
-    await play_audio(ctx, wav_path)
+    # Pass the user's voice channel to play_audio
+    voice_channel = ctx.author.voice.channel
+    await play_audio(voice_channel, wav_path)
 
 
 async def help(ctx, language="en"):
@@ -142,7 +193,8 @@ async def help(ctx, language="en"):
 
     # print in channel
     await ctx.send(text)
-    
+
+
 # Command to listen for "hey rita" in chat
 @bot.event
 async def on_message(message):
@@ -171,13 +223,11 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-
 # Command to disconnect bot from voice channel
 @bot.command()
 async def leave(ctx):
     if ctx.voice_client is not None:
         await ctx.voice_client.disconnect()
-
 
 # Run bot with your token
 bot.run(BOT_TOKEN)
