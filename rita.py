@@ -123,7 +123,7 @@ async def setup_hook():
 # Define a conversation history globally or as part of the user's session
 conversation_history = []
 
-async def generate_response(text, language="en", be_rita=True):
+async def generate_response(author_name, text, language="en", be_rita=True):
     global conversation_history
 
     if be_rita:
@@ -147,10 +147,16 @@ async def generate_response(text, language="en", be_rita=True):
     answer = emoji.replace_emoji(response.text, replace='').strip()
 
     # Optionally remove unnecessary punctuation or phrases in non-English languages
-    if language != "en":
-        if answer[-1] in ['.']:
-            answer = answer[:-1]
-        answer = re.sub(r'^[Oo]i!*,* *', '', answer)
+    # if language != "en":
+    #     if answer[-1] in ['.']:
+    #         answer = answer[:-1]
+    #     answer = re.sub(r'^[Oo]i!*,* *', '', answer)
+
+    if language == "en":
+        answer = f"Hey {author_name}, {answer}!"
+    else:
+        answer = f"Oi {author_name}, {answer}!"
+
 
     # Add the bot's response to the conversation history
     conversation_history.append(f"Bot: {answer}")
@@ -161,7 +167,7 @@ async def generate_response(text, language="en", be_rita=True):
 
 # Function to join voice channel and play audio
 async def join_and_play(ctx, message, language="en", be_rita=True):
-    answer = await generate_response(message.content, language, be_rita)
+    answer = await generate_response(ctx.author.display_name, message.content, language, be_rita)
 
     # Check if the user is in a voice channel
     if ctx.author.voice is None:
